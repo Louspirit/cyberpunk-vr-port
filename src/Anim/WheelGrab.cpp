@@ -56,6 +56,8 @@ std::atomic<float> g_wheelBlendRight{0.0f};
 std::atomic<float> g_wheelBlendLeft{0.0f};
 std::atomic<float> g_wheelSteer{0.0f};
 std::atomic<float> g_wheelSteerDeg{0.0f};
+std::atomic<bool> g_wheelMountedCar{false};
+void WheelSetMountedCar(bool car) {g_wheelMountedCar.store(car,std::memory_order_relaxed);}
 std::atomic<int>   g_wheelHornMask{0};
 
 namespace {
@@ -334,7 +336,8 @@ float WheelSteerInput() {
     std::lock_guard lock(g_steerMutex);
     if(g_sampledGrabEpoch!=(grab>>2)){g_steering.Reset();g_sampledGrabEpoch=grab>>2;}
     const float out=g_steering.Update(uint8_t(state&grab&3),frame,XrDiagNowUs(),
-        g_physicalRadius.load(std::memory_order_relaxed),g_liveControls.xrWheelSteerMaxDeg,g_liveControls.xrWheelSteerDeadDeg,
+        g_physicalRadius.load(std::memory_order_relaxed),
+        WheelFullLockForVehicle(g_liveControls.xrWheelSteerMaxDeg,g_wheelMountedCar.load(std::memory_order_relaxed)),g_liveControls.xrWheelSteerDeadDeg,
         g_liveControls.xrWheelPrediction ? g_liveControls.xrWheelPredictionMs:0.f);
     g_wheelSteer.store(out,std::memory_order_relaxed);
     g_wheelSteerDeg.store(g_steering.Angle(),std::memory_order_relaxed);

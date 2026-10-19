@@ -16,7 +16,7 @@ volatile int g_VRSmokeFingerActive=0,g_VRSmokeFingerActiveL=0,g_VRSmokeFingerCou
 int g_VRSmokeFingerIdx[32]{},g_VRSmokeFingerIdxL[32]{};
 // Boundaries unused by this ownership test must never silently emulate tracking.
 OpenXRManager& OpenXRManager::Get(){std::abort();}
-bool OpenXRManager::GetGestureHandFrame(OpenXRHeadPose*,OpenXRHeadPose*,uint64_t*,uint64_t*)const{std::abort();}
+bool OpenXRManager::GetGestureHandFrame(OpenXRHeadPose*,OpenXRHeadPose*,uint64_t*,uint64_t*,bool)const{std::abort();}
 void VRIK_QuatNorm(float*){std::abort();}
 float SharedPose(int index) {return slots[index];}
 bool OverlayIsVisible(){return false;}

@@ -10,9 +10,11 @@
 // of half-applied states, which is visible in the headset.
 
 #include "Anim/WheelGrab.hpp"
+#include "Anim/WheelRange.hpp"
 #include "Runtimes/HybridBodyYaw.hpp"
 #include "Anim/VehiclePosePolicy.hpp"
 #include "Utils/SharedSlots.hpp"
+#include "Runtimes/WristBase.hpp"
 #include "Core/VrCoreShared.hpp"
 #include "Overlay/ImGuiOverlay.hpp"
 #include "Overlay/LiveControlsUi.hpp"
@@ -32,6 +34,7 @@
 #include "Utils/DebugGate.hpp"
 #include "Camera/CameraState.hpp"
 #include "Hooks/Reflex.hpp"
+#include "Framegen/DlssFrameGen.hpp"
 
 extern volatile int g_verboseLog; // per-frame log spam toggle (default off)
 extern void Log(const char* fmt, ...);
@@ -271,20 +274,22 @@ void DrawVRHandsControls() {
     static float heightR = 0.0f, heightL = 0.0f; // vertical fine-tune offset (m)
     static float swingR = 1.0f,  swingL = 1.0f;    // elbow-swing gain
     static float poleR = 0.0f,   poleL = 0.0f;     // elbow pole spin (deg)
-    static float wRp = 0.0f, wRy = -90.0f, wRr = 0.0f;     // right wrist euler (deg)
-    static float wLp = -180.0f, wLy = -90.0f, wLr = 0.0f;  // left wrist euler (deg)
+    // Wrist euler OFFSETS (deg) from the baked base (Runtimes/WristBase.hpp): 0 is the tuned hand.
+    static float wRp = 0.0f, wRy = 0.0f, wRr = 0.0f;
+    static float wLp = 0.0f, wLy = 0.0f, wLr = 0.0f;
+    const float* wb = cvr::calib::kWristBase;
 
     // TWO-WAY SYNC (fixes "калибровка не сохраняется"). These statics used to be
     // one-way UI -> manager: they kept their hardcoded defaults after the manager
     // loaded vrik_calibration.ini / ran auto-calibration, so the FIRST slider touch
     // (or Apply) pushed 14 default values over the real calibration -- which the next
     // Save then wrote to disk. Pull the manager's live values into the sliders
-    // whenever the user isn't actively dragging.
+    // whenever the player isn't actively dragging.
     if (!ImGui::IsAnyItemActive()) {
         float c[14]; OpenXRManager::Get().GetVRHandCalib(c);
         scaleR=c[0]; scaleL=c[1]; heightR=c[2]; heightL=c[3];
         swingR=c[4]; swingL=c[5]; poleR=c[6]; poleL=c[7];
-        wRp=c[8]; wRy=c[9]; wRr=c[10]; wLp=c[11]; wLy=c[12]; wLr=c[13];
+        wRp=c[8]-wb[0]; wRy=c[9]-wb[1]; wRr=c[10]-wb[2]; wLp=c[11]-wb[3]; wLy=c[12]-wb[4]; wLr=c[13]-wb[5];
     }
 
     bool calChanged = false;
@@ -365,7 +370,7 @@ void DrawVRHandsControls() {
     if (ImGui::Button("Reset Defaults")) {
         scaleR = 1.05f; scaleL = 1.06f; heightR = 0.0f; heightL = 0.0f;
         swingR = 1.0f; swingL = 1.0f; poleR = 0.0f; poleL = 0.0f;
-        wRp = 0.0f; wRy = -90.0f; wRr = 0.0f; wLp = -180.0f; wLy = -90.0f; wLr = 0.0f;
+        wRp = wRy = wRr = wLp = wLy = wLr = 0.0f;
         OpenXRManager::Get().SetShoulderAnatomical(0.14f, -0.17f, 0.05f, -0.14f, -0.17f, 0.05f);
         calChanged = true;
     }
@@ -373,10 +378,11 @@ void DrawVRHandsControls() {
     if (calChanged || apply) {
         OpenXRManager::Get().SetVRHandCalib(scaleR, scaleL, heightR, heightL,
                                             swingR, swingL, poleR, poleL,
-                                            wRp, wRy, wRr, wLp, wLy, wLr);
+                                            wb[0] + wRp, wb[1] + wRy, wb[2] + wRr,
+                                            wb[3] + wLp, wb[4] + wLy, wb[5] + wLr);
     }
     // AUTOSAVE: persist edits once the drag/press is released, so tweaks survive a
-    // restart without requiring the user to remember the Save button.
+    // restart without requiring the player to remember the Save button.
     {
         static bool s_calDirty = false;
         if (calChanged) s_calDirty = true;
@@ -625,8 +631,8 @@ static bool DrawDrivingControls(LiveControlsUiState& state) {
                                       "grip counts as grabbing the wheel. Bigger = easier to catch a\n"
                                       "wheel you cannot see; too big and every grip in a car grabs.");
                 }
-                float m = state.xrWheelSteerMaxDeg > 0.0f ? state.xrWheelSteerMaxDeg : 90.0f;
-                if (widgets::SliderFloat("Full lock at (deg)", &m, 30.0f, 120.0f, "%.0f")) {
+                float m = cvr::anim::WheelFullLockDegrees(state.xrWheelSteerMaxDeg);
+                if (widgets::SliderFloat("Car full lock at (deg)", &m, cvr::anim::WheelFullLockMin, cvr::anim::WheelFullLockMax, "%.0f")) {
                     state.xrWheelSteerMaxDeg = m;
                     changed = true;
                 }
@@ -634,7 +640,8 @@ static bool DrawDrivingControls(LiveControlsUiState& state) {
                     ImGui::SetTooltip("Wheel sensitivity: hand rotation from the grab position to full lock.\n"
                                       "One hand uses a hub calibrated where you grab; two use their connecting line.\n"
                                       "Adding or releasing a hand keeps the current turn.\n"
-                                      "90 = a quarter turn reaches full lock. Lower = more sensitive.\n"
+                                      "180 = a half turn to either full lock (default). Lower = more sensitive.\n"
+                                      "The car's cabin wheel has twice its native travel; road-wheel lock is unchanged.\n"
                                       "Travel beyond full lock keeps the same neutral position.");
                 }
                 float d = state.xrWheelSteerDeadDeg >= 0.0f ? state.xrWheelSteerDeadDeg : 1.5f;
@@ -796,8 +803,9 @@ bool DrawFpsOverlayControls(LiveControlsUiState& state) {
     return changed;
 }
 
-bool DrawLiveControls(LiveControlsUiState& state,int section) {
+bool DrawLiveControls(LiveControlsUiState& state,int section,bool* foveatedEditing) {
     bool changed = false;
+    if(foveatedEditing)*foveatedEditing=false;
 
     if (ImGui::Button("Recenter HMD (F7)")) {
         RequestLiveControlsRecenter();
@@ -809,6 +817,90 @@ bool DrawLiveControls(LiveControlsUiState& state,int section) {
 
     if (section>=0 || ImGui::BeginTabBar("CyberpunkVRPortTabs")) {
         if (section>=0 ? section==0 : ImGui::BeginTabItem("GENERAL")) {
+            const bool casBlocked=cvr::sharpen::gameUpscaler.BlocksCas();
+            float casAmount=casBlocked?0.0f:state.xrSharpmix;
+            ImGui::BeginDisabled(casBlocked);
+            if(widgets::SliderFloat("CAS Sharpening", &casAmount, 0.0f, 1.0f, "%.3f") && !casBlocked) {
+                state.xrSharpmix=casAmount;changed=true;
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("Contrast-adaptive sharpening for both eyes. 0 = off, 1 = full strength. Disabled automatically with game DLAA.");
+            ImGui::EndDisabled();
+            if (ImGui::CollapsingHeader("FIXED FOVEATED RENDERING", ImGuiTreeNodeFlags_DefaultOpen)) {
+                auto& foveated = state.foveated;
+                changed |= widgets::Combo("Peripheral quality", &foveated.mode, "Off\0Quality\0Balanced\0Performance\0");
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("The center follows game DLSS/DLAA. Peripheral DLAA uses 100%% / 75%% / 50%% of the game's render resolution.");
+                ImGui::BeginDisabled(foveated.mode == 0);
+                changed |= widgets::SliderFloat("Center width", &foveated.widthPercent, 20.0f, 100.0f, "%.1f %%");
+                bool editing=ImGui::IsItemActive();
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Full-quality region width as a percentage of each eye image.");
+                changed |= widgets::SliderFloat("Center height", &foveated.heightPercent, 20.0f, 100.0f, "%.1f %%");
+                editing|=ImGui::IsItemActive();
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Full-quality region height as a percentage of each eye image.");
+                foveated=cvr::foveated::Normalize(foveated);
+                const float maxX=(100.0f-foveated.widthPercent)*.5f, maxY=(100.0f-foveated.heightPercent)*.5f;
+                ImGui::BeginDisabled(maxX==0);
+                changed |= widgets::SliderFloat("Center offset X", &foveated.offsetXPercent, -maxX, maxX, "%.1f %%");
+                editing|=ImGui::IsItemActive();
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Percentage of eye-image width. Negative = left, positive = right.");
+                ImGui::EndDisabled();
+                ImGui::BeginDisabled(maxY==0);
+                changed |= widgets::SliderFloat("Center offset Y", &foveated.offsetYPercent, -maxY, maxY, "%.1f %%");
+                editing|=ImGui::IsItemActive();
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Percentage of eye-image height. Negative = up, positive = down toward the hands.");
+                ImGui::EndDisabled();
+                if(foveatedEditing)*foveatedEditing=editing;
+                changed |= ImGui::Checkbox("Show region boundary", &foveated.showBoundary);
+                ImGui::EndDisabled();
+                const auto status = cvr::foveated::GetStatus();
+                ImGui::TextDisabled("%s", status.text);
+                if (foveated.mode && status.evaluations) {
+                    ImGui::Text("DLSS GPU: native %.2f ms / foveated %.2f ms",status.nativeMs,status.totalMs);
+                }
+            }
+            changed|=CheckboxInt("Shared sun shadows",&state.monoCascades);
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("Render sun cascades once for both eyes. Shadow quality and distance remain controlled by the game.");
+            changed|=SliderIntClamped("Scope lens stabilization",&state.scopeStabilize,0,100);
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("Magnifying scope lenses while the view moves: share of the stabilised image (percent). Higher: no blinking of lights and grates, softer. 0 = off. Standing still the lens is untouched.");
+            if (ImGui::CollapsingHeader("VARIABLE RATE SHADING", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::PushID("fixedVrs");
+                auto& v=state.vrs;
+                changed|=widgets::Combo("Peripheral shading",&v.mode,"Off\0 2 x 2\0 4 x 4\0");
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("Opaque scene materials in both eyes. The center stays 1 x 1. Unsupported 4 x 4 falls back to 2 x 2.");
+                ImGui::BeginDisabled(v.mode==0);
+                changed|=widgets::SliderFloat("Center width",&v.width,20,100,"%.1f %%");
+                changed|=widgets::SliderFloat("Center height",&v.height,20,100,"%.1f %%");
+                v=cvr::vrs::Normalize(v);
+                const float x=(100-v.width)*.5f,y=(100-v.height)*.5f;
+                ImGui::BeginDisabled(x==0);changed|=widgets::SliderFloat("Center offset X",&v.offsetX,-x,x,"%.1f %%");ImGui::EndDisabled();
+                ImGui::BeginDisabled(y==0);changed|=widgets::SliderFloat("Center offset Y",&v.offsetY,-y,y,"%.1f %%");ImGui::EndDisabled();
+                ImGui::EndDisabled();
+                const auto s=cvr::vrs::GetStatus();
+                if(v.mode) {
+                    if(s.failed)ImGui::TextDisabled("Unavailable: GPU resource error");
+                    else if(s.checked && !s.supported)ImGui::TextDisabled("VRS Tier 2 unavailable");
+                    else if(!s.readyMaps)ImGui::TextDisabled("Preparing");
+                    else ImGui::TextDisabled("%s | %u px tiles",v.mode==2 && s.additionalRates?"4 x 4":"2 x 2",s.tileSize);
+                }
+                ImGui::PopID();
+            }
+            if (ImGui::CollapsingHeader("HIDDEN AREA MASK", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::PushID("hiddenArea");
+                auto& h=state.hiddenArea;
+                changed|=CheckboxInt("Mask lens edges",&h.enabled);
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("Skips shading the parts of each eye image the lens never shows. The visible area is unchanged.");
+                ImGui::BeginDisabled(!h.enabled);
+                changed|=widgets::SliderFloat("Visible radius",&h.radius,cvr::hidden_area::MinRadius,cvr::hidden_area::MaxRadius,"%.0f %%");
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("Size of the shaded area as a percentage of the eye's field of view: 100%% touches its edges, 141%% masks nothing inside it.\nLower it until a dark border appears at the edge of the lens, then raise it until the border is gone.");
+                ImGui::EndDisabled();
+                h=cvr::hidden_area::Normalize(h);
+                if(h.enabled) {
+                    const auto s=cvr::hidden_area::GetStatus();
+                    if(!s.masked[0] && !s.masked[1])ImGui::TextDisabled("Waiting for the scene depth");
+                    else ImGui::TextDisabled("Masked %.1f %% / %.1f %% of pixels (MAIN / VRCAM)",s.hiddenPercent[0],s.hiddenPercent[1]);
+                }
+                ImGui::PopID();
+            }
             if (ImGui::CollapsingHeader("GAME MENUS", ImGuiTreeNodeFlags_DefaultOpen)) {
                 changed |= CheckboxInt("VR menu quad", &state.xrMenuRect);
                 changed |= widgets::SliderFloat("VR menu FOV", &state.xrMenuFov, 30.0f, 120.0f, "%.1f deg");
@@ -853,14 +945,26 @@ bool DrawLiveControls(LiveControlsUiState& state,int section) {
         if (section>=0 ? section==1 : ImGui::BeginTabItem("FRAMEGEN")) {
             auto& fg=state.framegen;
             changed|=ImGui::Checkbox("Enable frame generation",&fg.enabled);
-            if(ImGui::IsItemHovered())ImGui::SetTooltip("Hand smoothing is automatically disabled while frame generation is enabled.");
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("While frame generation is enabled, hand smoothing runs at its rate times xr_hand_lerp_framegen_scale (1.5; 0 turns it off).");
             int backend=int(fg.backend);
-            if(widgets::Combo("Frame generator",&backend,"FidelityFX\0NVIDIA OFA + FidelityFX\0")) {fg.backend=cvr::framegen::Backend(backend);changed=true;}
-            if(fg.backend==cvr::framegen::Backend::Nvidia)
+            if(widgets::Combo("Frame generator",&backend,"FidelityFX\0NVIDIA OFA + FidelityFX\0NVIDIA DLSS Frame Generation\0")) {fg.backend=cvr::framegen::Backend(backend);changed=true;}
+            using cvr::framegen::Backend;
+            const Backend active=cvr::framegen::ActiveBackend();
+            if(fg.backend==Backend::DlssG && fg.enabled && active!=Backend::DlssG)
+                ImGui::TextWrapped("DLSS Frame Generation is not available here (%s); FidelityFX is used.",cvr::framegen::dlssg::Reason());
+            else if(fg.backend==Backend::Nvidia && fg.enabled && active==Backend::FidelityFX)
+                ImGui::TextWrapped("NVIDIA optical flow is not available on this GPU; FidelityFX optical flow is used.");
+            else if(fg.backend==Backend::Nvidia && fg.flowScale)
                 changed|=widgets::Combo("NVIDIA quality",&fg.quality,"Fast (performance)\0Medium (balanced)\0Slow (best)\0");
-            int scale=fg.flowScale==100?2:(fg.flowScale==75?1:0);
-            if(widgets::Combo("Flow resolution",&scale,"50%\0 75%\0 100%\0")) {fg.flowScale=scale==2?100:(scale==1?75:50);changed=true;}
-            changed|=ImGui::Checkbox("Pace real frames at half headset refresh",&fg.autoPace);
+            if(fg.backend==Backend::FidelityFX || fg.backend==Backend::Nvidia) {
+                int scale=fg.flowScale==100?3:(fg.flowScale==75?2:(fg.flowScale==0?0:1));
+                if(widgets::Combo("Optical flow",&scale,"Off (game vectors only)\0 50%\0 75%\0 100%\0")) {fg.flowScale=scale==3?100:(scale==2?75:(scale==0?0:50));changed=true;}
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("The game's motion vectors already describe almost all motion; optical flow adds GPU time\nand memory for what they miss (some particles and effects).");
+            }
+            if(fg.backend==Backend::DlssG)
+                ImGui::TextWrapped("NVIDIA's frame generation model on the game's motion vectors and depth. Highest quality, RTX 40/50.");
+            changed|=ImGui::Checkbox("Adaptive real-frame pacing",&fg.autoPace);
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("Up to half headset refresh. Leaves more GPU time for generated frames when adjacent real frames are being missed.");
             ImGui::TextWrapped("Uses game motion vectors and depth in both eyes. Adds one intermediate frame between real frames.");
             ImGui::Separator();
             const auto runtimeStatus=cvr::framegen::GetRuntimeStatus();
@@ -888,8 +992,8 @@ bool DrawLiveControls(LiveControlsUiState& state,int section) {
             ImGui::Separator();
             if(ImGui::CollapsingHeader("INTERACTIONS / DIALOGS",ImGuiTreeNodeFlags_DefaultOpen)){
                 changed |= CheckboxInt("World-space interactions / dialogs",&state.xrInteractionPanel);
-                changed |= widgets::SliderFloat("Interaction free-look cone",&state.xrInteractionFollowDeg,5.0f,90.0f,"%.1f deg");
-                changed |= widgets::SliderFloat("Loot free-look cone",&state.xrLootFollowDeg,5.0f,90.0f,"%.1f deg");
+                changed |= widgets::SliderFloat("Interaction free-look cone",&state.xrInteractionFollowDeg,0.0f,90.0f,"%.1f deg");
+                changed |= widgets::SliderFloat("Loot free-look cone",&state.xrLootFollowDeg,0.0f,90.0f,"%.1f deg");
                 if(ImGui::IsItemHovered())ImGui::SetTooltip("Used while the loot panel and item description are visible. Default: 10 degrees.");
                 changed |= widgets::SliderFloat("Interaction distance",&state.xrInteractionDistance,.5f,5.0f,"%.2f m");
                 changed |= widgets::SliderFloat("Interaction FOV",&state.xrInteractionFov,30.0f,120.0f,"%.1f deg");
@@ -946,6 +1050,17 @@ bool DrawLiveControls(LiveControlsUiState& state,int section) {
             }
             ImGui::Separator();
 
+            changed |= CheckboxInt("Controller vibration", &state.xrHaptics);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Haptics: every round by weapon class (handgun, rifle, shotgun, sniper),\n"
+                                  "melee block and parry, bullet block and deflect, reaching a belt element,\n"
+                                  "pulling a grenade pin. Two-handed grip: both hands; one hand: one.");
+            }
+            ImGui::BeginDisabled(state.xrHaptics == 0);
+            changed |= widgets::SliderFloat("Vibration strength", &state.xrHapticScale, 0.0f, 2.0f, "%.2fx");
+            ImGui::EndDisabled();
+            ImGui::Separator();
+
             changed |= CheckboxInt("Enable VR -> XInput merge", &state.xrXInputHook);
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("OR the VR controller state into XInput gamepad 0 every poll.\n"
@@ -997,6 +1112,12 @@ bool DrawLiveControls(LiveControlsUiState& state,int section) {
 
             ImGui::Separator();
             changed |= CheckboxInt("Breaststroke swimming", &state.xrBreaststrokeSwim);
+            changed |= CheckboxInt("Physical crouch", &state.xrPhysicalCrouch);
+            float crouchCm=state.xrPhysicalCrouchDepth*100.f;
+            if(ImGui::SliderFloat("Physical crouch depth",&crouchCm,15.f,55.f,"%.0f cm")) {
+                state.xrPhysicalCrouchDepth=crouchCm*.01f;changed=true;
+            }
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("Height loss after the measured lean. Standing back up releases physical crouch.");
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("In water: reach forward with both hands, sweep out and pull back.\n"
                                   "Movement begins during the pull. Gentle strokes swim normally; fast pulls boost.\n"
@@ -1080,6 +1201,12 @@ bool DrawLiveControls(LiveControlsUiState& state,int section) {
         }
         // The "Pose pair-lock" checkbox is gone: it toggled a freeze that only meant something
         // under AER's one-camera eye alternation. The ini key still round-trips so old files load.
+        changed |= CheckboxInt("Asymmetric projection", &state.xrAsymProjection);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("ON: each eye renders exactly its own off-centre lens window\n"
+                              "(more of the panel used, square pixels).\n"
+                              "OFF: the symmetric frustum sized to the widest half-angle.");
+        }
             }
 
             DrawStereoControls();
