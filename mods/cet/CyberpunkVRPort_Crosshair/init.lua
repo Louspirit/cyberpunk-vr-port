@@ -3,9 +3,7 @@ local container = nil
 -- A smart sniper rifle (Ashura) aims through its smart HUD: keep the crosshair
 -- (lock-on markers) visible for it while VR weapon aim hides every other one.
 local smartKey, smartValue = nil, false
-local function smartSniperActive()
-    local player = Game.GetPlayer()
-    local weapon = player and player:GetActiveWeapon()
+local function smartSniperActive(weapon)
     if not weapon then smartKey = nil; return false end
     local key = tostring(weapon:GetEntityID().hash)
     if key == smartKey then return smartValue end
@@ -21,7 +19,7 @@ local function smartSniperActive()
 end
 
 -- Read by the test harness: what the last crosshair update decided.
-local M = { smart=false, hidden=nil, error=nil, hudScale=1, scaled=0 }
+local M = { smart=false, native=false, hidden=nil, error=nil, hudScale=1, scaled=0 }
 
 -- The smart HUD drawn at its flat-screen size fills most of the view in VR: draw
 -- its frame, backdrop and decorations at SMART_HUD_SCALE. Each part is a box
@@ -52,12 +50,23 @@ local function scaleSmartHud(scale)
     M.hudScale, M.scaled = scale, n
 end
 
+local function nativeReticleActive(weapon)
+    local optics = GetMod and GetMod('CyberpunkVRPort_Optics')
+    return optics and type(optics.ShouldKeepNativeReticle) == 'function'
+        and optics.ShouldKeepNativeReticle(weapon) == true or false
+end
+
 local function hideCrosshair()
-    if not GetVRWeaponAim() then M.hidden=false;return false end
-    local ok, smart = pcall(smartSniperActive)
+    local player = Game.GetPlayer()
+    local weapon = player and player:GetActiveWeapon()
+    local ok, smart = pcall(smartSniperActive, weapon)
+    local nativeOk, native = pcall(nativeReticleActive, weapon)
     M.smart = ok and smart or false
-    M.error = (not ok) and tostring(smart) or nil
-    M.hidden = not (ok and smart)
+    M.native = nativeOk and native or false
+    M.error = (not ok) and tostring(smart) or (not nativeOk) and tostring(native) or nil
+    -- Unauthored or incomplete optics retain the game's scope HUD. Do not
+    -- replace it with a second aim dot, or keep a previous weapon's decision.
+    M.hidden = GetVRWeaponAim() and not (M.smart or M.native) or false
     return M.hidden
 end
 
@@ -93,8 +102,7 @@ registerForEvent("onInit", function()
             container:GetRootWidget():SetVisible(true)
             container:GetActiveCrosshairWidget():SetVisible(true)
         end
-        local okSmart, smart = pcall(smartSniperActive)
-        pcall(scaleSmartHud, (okSmart and smart) and SMART_HUD_SCALE or 1)
+        pcall(scaleSmartHud, M.smart and SMART_HUD_SCALE or 1)
     end)
 
     Observe("gameuiCrosshairBaseGameController", "UpdateCrosshairState", function(this)
@@ -115,8 +123,7 @@ registerForEvent("onInit", function()
             container:GetRootWidget():SetVisible(true)
             container:GetActiveCrosshairWidget():SetVisible(true)
         end
-        local okSmart, smart = pcall(smartSniperActive)
-        pcall(scaleSmartHud, (okSmart and smart) and SMART_HUD_SCALE or 1)
+        pcall(scaleSmartHud, M.smart and SMART_HUD_SCALE or 1)
     end)
 end)
 

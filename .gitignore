@@ -17,6 +17,7 @@ CyberpunkVRProxy.log
 tools/*
 !tools/roomscale_tests/
 !tools/scanner_input_tests/
+!tools/optics_tests/
 !tools/body_rotation_tests/
 !tools/body_rotation_tests/*.py
 tools/body_rotation_tests/__pycache__/
@@ -43,6 +44,8 @@ tools/asym_tests/__pycache__/
 !tools/autograss_tests/
 releases/
 *.py
+!tools/optics_tests/*.py
+tools/optics_tests/__pycache__/
 !tools/body_rotation_tests/*.py
 !tools/autograss_tests/*.py
 !tools/single_pass_tests/*.py
