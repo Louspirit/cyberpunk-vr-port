@@ -1,5 +1,6 @@
 #include "Hooks/ScannerGesture.hpp"
 #include "Camera/GazeCenter.hpp"
+#include "Camera/ScannerZoom.hpp"
 #include "Camera/TakeoverTargeting.hpp"
 #include "Runtimes/AsymmetricProjection.hpp"
 #include "Runtimes/RuntimeFovCorrection.hpp"
@@ -132,7 +133,53 @@ void CalibrationCases() {
     const auto limit=cvr::gaze::FromWindows(1.6f,.4f,1.6f,.4f,{0,30});
     Check(std::isfinite(limit.tangentY) && limit.tangentY<=1.f);
 }
+void ScannerZoomCases() {
+    using namespace cvr::scanner_zoom;
+    MainSample main;
+    Override secondary;
+    float zoom=1.f,source{};
+    // VRCAM may prepare first: no source yet means no invented zoom.
+    Check(!main.Read(100,source));
+    Check(!secondary.Update(10,zoom,false,0));Near(zoom,1);
+    main.Publish(2.f,100,true);
+    Check(main.Read(101,source));Check(secondary.Update(10,zoom,true,source));Near(zoom,2);
+    // Repeated preparation must not learn our previous write as the native value.
+    Check(secondary.Update(10,zoom,true,3));Near(zoom,3);
+    Check(!secondary.Update(10,zoom,false,0));Near(zoom,1);
+    // A native refresh made while owned is preserved on release.
+    Check(secondary.Update(10,zoom,true,4));zoom=1.25f;
+    Check(!secondary.Update(10,zoom,false,0));Near(zoom,1.25f);
+    Check(secondary.Update(10,zoom,true,4));zoom=1.5f;
+    Check(secondary.Update(10,zoom,true,2));
+    Check(!secondary.Update(10,zoom,false,0));Near(zoom,1.5f);
+    // Pool pointer change cannot restore the previous camera's saved zoom.
+    Check(secondary.Update(10,zoom,true,2));zoom=1.75f;
+    Check(!secondary.Update(20,zoom,false,0));Near(zoom,1.75f);
+    Check(main.Read(350,source));Check(!main.Read(351,source));
+    main.Publish(2,UINT32_MAX-30u,true);Check(main.Read(20,source));
+    main.Publish(std::numeric_limits<float>::quiet_NaN(),100,true);Check(!main.Read(101,source));
+    main.Publish(2,100,false);Check(!main.Read(101,source));
+    Check(!secondary.Update(20,zoom,true,std::numeric_limits<float>::infinity()));Near(zoom,1.75f);
+    // A common zoom scales both eyes equally without replacing their own
+    // off-centre lens windows. Check the actual per-eye ToEngine projections.
+    constexpr float radians=3.14159265358979323846f/180.f;
+    XrFovf lens[]={{-54*radians,40*radians,44*radians,-55*radians},
+                  {-40*radians,54*radians,44*radians,-55*radians}};
+    XrQuaternionf orientation[]={{0,0,0,1},{0,0,0,1}};
+    cvr::projection::EyeWindow windows[2]{};
+    Check(cvr::projection::Windows(lens,orientation,windows));
+    const auto left=cvr::projection::ToEngine(windows[0]);
+    const auto right=cvr::projection::ToEngine(windows[1]);
+    const float leftBase=1/std::tan(left.vfovDeg*.5f*radians);
+    const float rightBase=1/std::tan(right.vfovDeg*.5f*radians);
+    main.Publish(3,100,true);Check(main.Read(101,source));
+    zoom=1;Check(secondary.Update(20,zoom,true,source));
+    Near((leftBase*zoom)/leftBase,(rightBase*source)/rightBase);
+    Check(left.shiftX!=right.shiftX);Near(left.shiftY,right.shiftY);
+    Check(!secondary.Update(20,zoom,false,0));Near(zoom,1);
+}
 int main(){
+    ScannerZoomCases();
     CalibrationCases();
     constexpr float pi=3.14159265358979323846f;
     const float up=std::tan(44*pi/180),down=std::tan(-55*pi/180),half=(up-down)*.5f;

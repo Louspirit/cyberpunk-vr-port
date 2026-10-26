@@ -37,9 +37,12 @@
 #include "Core/VrCoreShared.hpp"
 #include "Runtimes/OpenXRManager.hpp"
 #include "Runtimes/AsymmetricProjection.hpp"
+#include "Camera/ScannerZoom.hpp"
+#include "Hooks/ScannerGesture.hpp"
 
 #include <windows.h>
 #include <atomic>
+#include <mutex>
 
 extern "C" int CyberpunkVR_MainIsRightEye;
 extern void Log(const char* fmt, ...);
@@ -127,6 +130,44 @@ struct Side {
     float halfX = 0.0f, halfY = 0.0f;   // the window's half spans (tangent), for ViewWindowOf
 };
 Side g_side[2];
+cvr::scanner_zoom::MainSample g_scannerZoom;
+cvr::scanner_zoom::Override g_scannerZoomOverride;
+std::mutex g_scannerZoomMutex;
+
+void SyncScannerZoom(uint8_t* view,int side) {
+    std::lock_guard lock(g_scannerZoomMutex);
+    float& zoom=*reinterpret_cast<float*>(view+kInputFov+3*sizeof(float));
+    const bool scanner=cvr::projection::Active() && g_menuModeValue==0 &&
+        !g_isInVehicle && cvr::input::ScannerVision()==1;
+    const auto now=static_cast<uint32_t>(GetTickCount64());
+    if(side==0) {
+        static bool lastScanner=false;
+        static float lastZoom=0;
+        static uint32_t lastLog=0;
+        if(scanner && (!lastScanner || (std::fabs(zoom-lastZoom)>.001f && uint32_t(now-lastLog)>=1000u))) {
+            Log("[scanner-zoom] MAIN scene zoom=%.4f inputFov=%.4f scale=%.4f add=%.4f\n",
+                zoom,*reinterpret_cast<float*>(view+kInputFov),
+                *reinterpret_cast<float*>(view+kFovScale),*reinterpret_cast<float*>(view+kFovAdd));
+            lastZoom=zoom;lastLog=now;
+        }
+        lastScanner=scanner;
+        g_scannerZoom.Publish(zoom,now,scanner);
+        return;
+    }
+    float mainZoom{};
+    const bool enabled=scanner && g_scannerZoom.Read(now,mainZoom);
+    const bool wasOwned=g_scannerZoomOverride.owned;
+    const float previous=g_scannerZoomOverride.written;
+    const float before=zoom;
+    const bool applied=g_scannerZoomOverride.Update(reinterpret_cast<uintptr_t>(view),zoom,enabled,mainZoom);
+    static uint32_t lastLog=0;
+    if(applied && (!wasOwned || (std::fabs(previous-mainZoom)>.001f && uint32_t(now-lastLog)>=1000u))) {
+        Log("[scanner-zoom] VRCAM scene zoom=%.4f -> %.4f (MAIN); per-eye lens window preserved\n",before,mainZoom);
+        lastLog=now;
+    }
+    else if(wasOwned && !applied)
+        Log("[scanner-zoom] released VRCAM scene zoom (scanner/source inactive)\n");
+}
 
 // THE RENDER TARGET KEEPS THE GAME RESOLUTION'S ASPECT, the lens window has the headset's. The window is
 // grown to the target's aspect so the pixels stay square (AsymmetricProjection.hpp); what that costs is
@@ -274,7 +315,13 @@ __int64 __fastcall Detour_ViewPrepare(void* ctx, void* spec, uint8_t* view) {
             if (key != 0 && key == g_vrcam_ctx_key.load(std::memory_order_relaxed)) side = 1;
             else if (is_main_view(view)) side = 0;
             CVR_DIAGNOSTIC(++CyberpunkVR_DebugAsymPrepare[side < 0 ? 2 : side]);
-            if (side >= 0) Apply(view, side);
+            if (side >= 0) {
+                // The game changes MAIN's scene zoom for the scanner. The RTT
+                // camera has no player scanner state; synchronize this scalar
+                // before the producer builds its per-eye projection/history.
+                SyncScannerZoom(view,side);
+                Apply(view, side);
+            }
         } __except (EXCEPTION_EXECUTE_HANDLER) { side = -1; }
     }
     const __int64 r = g_orig_view_prepare(ctx, spec, view);
