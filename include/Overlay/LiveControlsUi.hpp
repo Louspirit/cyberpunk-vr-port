@@ -35,6 +35,8 @@ struct LiveControlsUiState {
     float xrHudBrightness = 1.0f;
     float xrHudShadow = 1.0f;
     float xrHudGlow = 1.0f;
+    int xrGazeCenterMode = 0; // 0=rendered view centre (legacy), 1=physical headset forward
+    float xrGazePitchDeg = 0.0f;
     cvr::hud::LayoutSettings hudElements{};
     cvr::framegen::Settings framegen{};
     cvr::foveated::Settings foveated{};

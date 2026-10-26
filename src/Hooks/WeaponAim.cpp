@@ -31,6 +31,7 @@
 #include "Camera/CameraState.hpp"
 #include "Camera/TakeoverTargeting.hpp"
 #include "Camera/GazeCenter.hpp"
+#include "Runtimes/AsymmetricProjection.hpp"
 #include "Core/VrCoreShared.hpp"
 #include "Hooks/RoomscaleMove.hpp"
 #include "Overlay/VrOverlay.hpp"
@@ -75,7 +76,10 @@ extern "C" inline void* Hooked_WaTargetingUpdate(void* rcx, void* rdx, void* r8,
     if(g_menuModeValue==0 && !cvr::vrui::CapturesInput() && OpenXRManager::Get().IsSessionRunning()) {
         const auto player=cvr::roomscale::PlayerIdentity();uint64_t entity{};
         if(player && ReadU64Safe(player+0x48,&entity)) {
-            const bool centered=cvr::camera::CenterHeadGaze(rcx,player,entity,cvr::gaze::Read().tangentY);
+            const auto calibration=cvr::gaze::GetCalibration();
+            const bool forceCameraForward=cvr::gaze::ForceCameraForward(calibration,
+                cvr::gaze::headLook.load(std::memory_order_relaxed),cvr::projection::Active());
+            const bool centered=cvr::camera::CenterHeadGaze(rcx,player,entity,cvr::gaze::Read().tangentY,forceCameraForward);
             CVR_DIAGNOSTIC(CyberpunkVR_GazeTargetState=reinterpret_cast<uintptr_t>(rcx));
             CVR_DIAGNOSTIC(CyberpunkVR_GazeTargetUpdates+=centered?1:0);
         }

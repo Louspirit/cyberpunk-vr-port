@@ -990,6 +990,17 @@ bool DrawLiveControls(LiveControlsUiState& state,int section,bool* foveatedEditi
             changed |= widgets::SliderFloat("Shadow / outline", &state.xrHudShadow, 0.0f, 2.0f, "%.2fx");
             changed |= widgets::SliderFloat("Glow", &state.xrHudGlow, 0.0f, 2.0f, "%.2fx");
             ImGui::Separator();
+            if(ImGui::CollapsingHeader("SCANNER / HEAD-GAZE AIM",ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::BeginDisabled(state.xrAsymProjection==0);
+                const char* gazeModes[]={"Rendered view centre (legacy)","Physical headset forward"};
+                changed |= widgets::Combo("Gaze centre",&state.xrGazeCenterMode,gazeModes,2);
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("Physical headset forward keeps head-gaze targeting on the headset's forward axis.\nLegacy targets the rendered lens window's centre, which can be lower on asymmetric headsets.");
+                changed |= widgets::SliderFloat("Gaze pitch trim",&state.xrGazePitchDeg,-30.0f,30.0f,"%.1f deg");
+                if(ImGui::IsItemHovered())ImGui::SetTooltip("Positive raises the real selection ray and scanner reticle together.\nUse this to calibrate head-gaze aiming; HUD element offsets only move the display.");
+                ImGui::EndDisabled();
+                if(state.xrAsymProjection==0)ImGui::TextDisabled("Enable Asymmetric projection in STEREO to calibrate head-gaze aim.");
+            }
+            ImGui::Separator();
             if(ImGui::CollapsingHeader("INTERACTIONS / DIALOGS",ImGuiTreeNodeFlags_DefaultOpen)){
                 changed |= CheckboxInt("World-space interactions / dialogs",&state.xrInteractionPanel);
                 changed |= widgets::SliderFloat("Interaction free-look cone",&state.xrInteractionFollowDeg,0.0f,90.0f,"%.1f deg");

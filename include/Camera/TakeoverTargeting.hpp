@@ -12,8 +12,11 @@ inline constexpr size_t TargetingDefaultAnglesOffset=0x31210;
 
 // Re-aim the native head-gaze cache without moving its origin, camera or muzzle.
 // The original update refreshes the cache before this is called on each frame.
-inline bool CenterHeadGaze(void* state,uintptr_t player,uint64_t entity,float tangentY) {
-    if(!state || !player || !entity || !std::isfinite(tangentY) || std::abs(tangentY)>1.f || tangentY==0)return false;
+inline bool CenterHeadGaze(void* state,uintptr_t player,uint64_t entity,float tangentY,bool forceCameraForward=false) {
+    // Legacy symmetric views leave the original cache alone. Explicit head-forward
+    // calibration also accepts zero so a nearby FPP-cache direction cannot remain off-axis.
+    if(!state || !player || !entity || !std::isfinite(tangentY) || std::abs(tangentY)>1.f ||
+       (tangentY==0 && !forceCameraForward))return false;
     auto* bytes=static_cast<uint8_t*>(state);
     uintptr_t owner{};uint64_t ownerEntity{};uint32_t active{};
     std::memcpy(&owner,bytes,sizeof(owner));std::memcpy(&ownerEntity,bytes+8,sizeof(ownerEntity));
