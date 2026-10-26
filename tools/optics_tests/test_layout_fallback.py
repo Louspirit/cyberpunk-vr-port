@@ -19,8 +19,8 @@ def fixture(profile_name="w_att__scope_sniper_01_010173"):
     )
     lua.globals().profileName = profile_name
     lua.execute(r'''
-        events, logs, components, order, missing = {}, {}, {}, {}, {}
-        dotOn, componentReads, publishedPath = 0, 0, nil
+        events, logs, components, order, missing, unlisted = {}, {}, {}, {}, {}, {}
+        dotOn, componentReads, lookupCalls, publishedPath = 0, 0, 0, nil
         weaponType, weaponEvolution, magnification = 'sniper', 'power', 6
         function registerForEvent(name, fn) events[name] = fn end
         function print(line) logs[#logs + 1] = line end
@@ -60,8 +60,14 @@ def fixture(profile_name="w_att__scope_sniper_01_010173"):
         function weapon:GetComponents()
             componentReads=componentReads+1
             local values={}
-            for _,c in ipairs(order) do if not missing[c.name] then values[#values+1]=c end end
+            for _,c in ipairs(order) do
+                if not missing[c.name] and not unlisted[c.name] then values[#values+1]=c end
+            end
             return values
+        end
+        function weapon:FindComponentByName(name)
+            lookupCalls=lookupCalls+1
+            return not missing[name] and components[name] or nil
         end
         function weapon:GetWorldOrientation() return Quaternion.new(0,0,0,1) end
         function weapon:GetWorldPosition() return vector(0,0,0,1) end
@@ -141,6 +147,47 @@ def load_crosshair(lua):
 
 
 class OpticalLayoutFallbackTests(unittest.TestCase):
+    def test_direct_lookup_recovers_all_authored_components_omitted_from_enumeration(self):
+        fixture().execute('''
+            for name in pairs(components)do if name:find('vr_optic_',1,true)==1 then unlisted[name]=true end end
+            tick()
+            assert(optics.path=='camera' and optics.error==nil and optics.directComponents==7)
+            assert(optics.directLookupErrors==0 and optics.diagnostics():find('directRecovered=7',1,true))
+            assert(components.vr_optic_surface.enabled and components.vr_optic_reticle_rear_panel.enabled)
+            assert(not components[profile.reticles[2].originalPanel].enabled)
+            activeWeapon=nil;tick()
+            assert(not components.vr_optic_surface.enabled and not components.vr_optic_reticle_rear_panel.enabled)
+            assert(components[profile.reticles[2].originalPanel].enabled and dotOn==0)
+        ''')
+
+    def test_direct_lookup_does_not_override_enumerated_components(self):
+        fixture().execute('''
+            weapon.FindComponentByName=function()error('enumerated component should win')end
+            tick()
+            assert(optics.path=='camera' and optics.error==nil)
+            assert(optics.directComponents==0 and optics.directLookupErrors==0)
+        ''')
+
+    def test_one_truly_missing_component_still_preserves_native_artwork(self):
+        fixture().execute('''
+            for name in pairs(components)do if name:find('vr_optic_',1,true)==1 then unlisted[name]=true end end
+            missing.vr_optic_reticle_rear_panel=true;tick()
+            assert(optics.path=='native' and optics.directComponents==6 and optics.directLookupErrors==0)
+            assert(optics.error:find('vr_optic_reticle_rear_panel',1,true))
+            assert(components[profile.reticles[2].originalPanel].enabled)
+            assert(not components.vr_optic_surface.enabled)
+        ''')
+
+    def test_lookup_errors_are_reported_without_hiding_native_artwork(self):
+        fixture().execute('''
+            missing.vr_optic_reticle_rear_panel=true
+            weapon.FindComponentByName=function()error('lookup unavailable')end
+            tick()
+            assert(optics.path=='native' and optics.directLookupErrors==1)
+            assert(optics.diagnostics():find('lookupErrors=1',1,true))
+            assert(components[profile.reticles[2].originalPanel].enabled)
+        ''')
+
     def test_complete_scope_keeps_existing_reticle_path_without_extra_dot(self):
         fixture().execute('''
             tick();assert(optics.error==nil and optics.path=='camera')
