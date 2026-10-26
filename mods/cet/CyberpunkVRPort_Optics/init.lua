@@ -104,10 +104,28 @@ end
 
 -- A scope archive can be replaced independently of this CET module. Do not hide
 -- its native artwork until every replacement layer is actually on the weapon.
-local function missingOpticalComponents(profile, components)
-    local missing = {}
+local opticalComponentNames = { 'vr_optic_low', 'vr_optic_surface', 'vr_optic_panel',
+    'vr_optic_reticle_front', 'vr_optic_reticle_front_panel',
+    'vr_optic_reticle_rear', 'vr_optic_reticle_rear_panel' }
+local function resolveComponent(weapon, components, name)
+    if components[name] then return components[name], false, false end
+    -- Appearance components may not be included in a script-side enumeration.
+    -- Prefer that snapshot, then ask the entity for this exact authored name.
+    local ok, component = pcall(function() return weapon:FindComponentByName(CName.new(name)) end)
+    if ok and component then
+        components[name] = component
+        return component, true, false
+    end
+    return nil, false, not ok
+end
+
+local function missingOpticalComponents(profile, components, weapon)
+    local missing, recovered, errors = {}, 0, 0
     local function need(name)
-        if not components[name] then missing[#missing + 1] = name end
+        local component, direct, failed = resolveComponent(weapon, components, name)
+        if not component then missing[#missing + 1] = name end
+        if direct then recovered = recovered + 1 end
+        if failed then errors = errors + 1 end
     end
     if not profile.cameraOnly then need('vr_optic_low') end
     need('vr_optic_surface')
@@ -116,7 +134,7 @@ local function missingOpticalComponents(profile, components)
         need(layer.surface)
         need(layer.panel)
     end
-    return missing
+    return missing, recovered, errors
 end
 
 -- cameraOff runs on every frame without a camera path. A camera this state did not switch on is
@@ -183,8 +201,16 @@ local function restoreWeapon(keepWeapon)
     -- after equipment swaps, unloading a save, or appearance replacement.
     local weapon = state.weaponID and Game.FindEntityByID(state.weaponID)
     if weapon then
+        local components = {}
         for _, component in ipairs(weapon:GetComponents()) do
             local name = NameToString(component:GetName())
+            components[name] = component
+        end
+        if state.profile then
+            for _, name in ipairs(opticalComponentNames) do resolveComponent(weapon, components, name) end
+        end
+        for name in pairs(state.originals) do resolveComponent(weapon, components, name) end
+        for name, component in pairs(components) do
             local saved = state.originals[name]
             if saved then
                 if saved.mask ~= nil then component.chunkMask = saved.mask end
@@ -214,6 +240,7 @@ local function scan(player, weapon)
         state.weaponID, state.weaponKey = id, key
     end
     M.missingComponents, M.fallbackReason = nil, nil
+    M.directComponents, M.directLookupErrors = 0, 0
     state.nativeReticleKey = nil
     if not weapon or not weapon:IsRanged() then
         M.path, M.profile, M.scopeOffset, M.magnification, M.error = 'none', nil, nil, 1, nil
@@ -254,9 +281,9 @@ local function scan(player, weapon)
     M.path, M.magnification, M.profile = path, mag, profile and profile.key
     if path == 'native' and not profile then M.fallbackReason = 'No authored optical profile' end
     M.scopeOffset = profile and profile.scopeOffset
-    local low, surface, panel = components.vr_optic_low, components.vr_optic_surface, components.vr_optic_panel
     if profile then
-        local missing = missingOpticalComponents(profile, components)
+        local missing, recovered, errors = missingOpticalComponents(profile, components, weapon)
+        M.directComponents, M.directLookupErrors = recovered, errors
         if #missing > 0 then
             -- Also undo a previously applied layout when the same entity changes
             -- appearance. Remember the entity so a missing archive is retried at
@@ -271,6 +298,7 @@ local function scan(player, weapon)
             cameraOff(player);return
         end
     end
+    local low, surface, panel = components.vr_optic_low, components.vr_optic_surface, components.vr_optic_panel
     -- Equipment can replace the scope without replacing the weapon entity. Undo
     -- the previous profile before applying its successor, or retaining native UI.
     if path == 'native' or state.profile ~= profile then
@@ -545,6 +573,7 @@ local function update(delta)
         state = {elapsed=0, originals={}, cameraOn=false};M.path='none';M.cameraFrame=nil
         M.profile, M.scopeOffset, M.error, M.fallbackReason, M.missingComponents = nil, nil, nil, nil, nil
         M.magnification = 1
+        M.directComponents, M.directLookupErrors = 0, 0
         M.waitingForStereo = false
         sight.active, sight.looking, M.sightZoom = false, false, 1;syncWeaponLayer(false);sightDot(false);sightLine(nil)
         if (sight.ox ~= 0 or sight.oy ~= 0 or sight.oz ~= 0) and SetVRSightApproach then SetVRSightApproach(0, 0, 0) end
@@ -558,6 +587,7 @@ local function update(delta)
         if state.weaponID then restoreWeapon() end
         M.path, M.profile, M.scopeOffset, M.error, M.fallbackReason, M.missingComponents = 'none', nil, nil, nil, nil, nil
         M.magnification = 1
+        M.directComponents, M.directLookupErrors = 0, 0
         return
     end
     local weapon = player:GetActiveWeapon()
@@ -645,9 +675,10 @@ end
 -- One line per equipment/path/error transition in CET's log; also callable as
 -- print(GetMod('CyberpunkVRPort_Optics').diagnostics()) while holding a problem scope.
 function M.diagnostics()
-    return string.format('weapon=%s path=%s profile=%s magnification=%.3f stereoWait=%s error=%s fallback=%s',
+    return string.format('weapon=%s path=%s profile=%s magnification=%.3f stereoWait=%s directRecovered=%d lookupErrors=%d error=%s fallback=%s',
         tostring(state.weaponKey or 'none'), tostring(M.path), tostring(M.profile or 'none'),
-        M.magnification or 1, tostring(M.waitingForStereo == true), tostring(M.error or 'none'),
+        M.magnification or 1, tostring(M.waitingForStereo == true), M.directComponents or 0,
+        M.directLookupErrors or 0, tostring(M.error or 'none'),
         tostring(M.fallbackReason or 'none'))
 end
 local reportedStatus
