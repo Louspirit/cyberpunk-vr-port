@@ -102,6 +102,23 @@ local function toggle(component, value)
     if component and component:IsEnabled() ~= value then component:Toggle(value) end
 end
 
+-- A scope archive can be replaced independently of this CET module. Do not hide
+-- its native artwork until every replacement layer is actually on the weapon.
+local function missingOpticalComponents(profile, components)
+    local missing = {}
+    local function need(name)
+        if not components[name] then missing[#missing + 1] = name end
+    end
+    if not profile.cameraOnly then need('vr_optic_low') end
+    need('vr_optic_surface')
+    need('vr_optic_panel')
+    for _, layer in ipairs(profile.reticles or {}) do
+        need(layer.surface)
+        need(layer.panel)
+    end
+    return missing
+end
+
 -- cameraOff runs on every frame without a camera path. A camera this state did not switch on is
 -- looked up (a component search by name on the player) this often rather than every frame.
 local IDLE_CAMERA_CHECK = 0.25
@@ -159,7 +176,7 @@ local function updateWidgets(weapon, delta)
     end
 end
 
-local function restoreWeapon()
+local function restoreWeapon(keepWeapon)
     for _, widget in ipairs(state.hiddenWidgets or {}) do pcall(function() widget:SetVisible(true) end) end
     state.hiddenWidgets, state.widgetKey = {}, nil
     -- Resolve a live entity again; never dereference cached component wrappers
@@ -182,10 +199,11 @@ local function restoreWeapon()
         end
     end
     state.originals = {}
-    state.weaponID, state.weaponKey = nil, nil
+    if not keepWeapon then state.weaponID, state.weaponKey = nil, nil end
     state.applied, state.profile = nil, nil
     state.low, state.lowApp = nil, nil
     state.smart, state.dotSight = nil, nil
+    state.nativeReticleKey = nil
 end
 
 local function scan(player, weapon)
@@ -195,7 +213,12 @@ local function scan(player, weapon)
         restoreWeapon()
         state.weaponID, state.weaponKey = id, key
     end
-    if not weapon or not weapon:IsRanged() then M.path='none';cameraOff(player);return end
+    M.missingComponents, M.fallbackReason = nil, nil
+    state.nativeReticleKey = nil
+    if not weapon or not weapon:IsRanged() then
+        M.path, M.profile, M.scopeOffset, M.magnification, M.error = 'none', nil, nil, 1, nil
+        cameraOff(player);return
+    end
     local components, profile, main, holo = {}, nil, nil, nil
     state.dotSight = false
     for _, component in ipairs(weapon:GetComponents()) do
@@ -208,17 +231,6 @@ local function scan(player, weapon)
             if name:sub(1, #prefix) == prefix then holo = shifts end
         end
         if Profiles[name] then profile, main = Profiles[name], component end
-        -- SkinnedMeshComponent derives from ISkinTargetComponent, not
-        -- MeshComponent. The native ADS lens/cap gates belong to this class.
-        if component:IsA(CName.new('entSkinnedMeshComponent')) then
-            local visibility = NameToString(component.visibilityAnimationParam)
-            if visibility == 'visibleWhenAiming' or visibility == 'invisibleWhenAiming' then
-                state.originals[name] = state.originals[name] or {
-                    visibility=component.visibilityAnimationParam, enabled=component:IsEnabled() }
-                component.visibilityAnimationParam = CName.new('None')
-                toggle(component, visibility == 'visibleWhenAiming')
-            end
-        end
     end
     -- Holo reticles moved onto the panel centre (HOLO_SHIFT); every scan, as the widgets
     -- spawn asynchronously and are rebuilt with the attachment.
@@ -240,12 +252,49 @@ local function scan(player, weapon)
     local path, mag = Policy.select(weapon:HasScope() or sniper, not profile and not sniper, sniper, zoom)
     if not profile then path = path == 'camera' and 'native' or path end
     M.path, M.magnification, M.profile = path, mag, profile and profile.key
+    if path == 'native' and not profile then M.fallbackReason = 'No authored optical profile' end
     M.scopeOffset = profile and profile.scopeOffset
-    state.profile = profile
     local low, surface, panel = components.vr_optic_low, components.vr_optic_surface, components.vr_optic_panel
-    if profile and ((not low and not profile.cameraOnly) or not surface or not panel) then
-        M.path='native';M.error='Missing authored optical surface: '..profile.key
+    if profile then
+        local missing = missingOpticalComponents(profile, components)
+        if #missing > 0 then
+            -- Also undo a previously applied layout when the same entity changes
+            -- appearance. Remember the entity so a missing archive is retried at
+            -- the normal scan interval rather than on every rendered frame.
+            local smart = state.smart
+            restoreWeapon(true)
+            state.smart = smart
+            M.path, M.scopeOffset, M.missingComponents = 'native', nil, missing
+            M.fallbackReason = 'Incomplete authored optical layout'
+            M.error = 'Missing authored optical components ('..profile.key..'): '..table.concat(missing, ', ')
+            state.nativeReticleKey = state.weaponKey
+            cameraOff(player);return
+        end
+    end
+    -- Equipment can replace the scope without replacing the weapon entity. Undo
+    -- the previous profile before applying its successor, or retaining native UI.
+    if path == 'native' or state.profile ~= profile then
+        local smart, dotSight = state.smart, state.dotSight
+        restoreWeapon(true)
+        state.smart, state.dotSight = smart, dotSight
+    end
+    state.profile = profile
+    if path == 'native' then
+        M.error=nil;state.nativeReticleKey=state.weaponKey
         cameraOff(player);return
+    end
+    for name, component in pairs(components) do
+        -- SkinnedMeshComponent derives from ISkinTargetComponent, not
+        -- MeshComponent. The native ADS lens/cap gates belong to this class.
+        if component:IsA(CName.new('entSkinnedMeshComponent')) then
+            local visibility = NameToString(component.visibilityAnimationParam)
+            if visibility == 'visibleWhenAiming' or visibility == 'invisibleWhenAiming' then
+                state.originals[name] = state.originals[name] or {
+                    visibility=component.visibilityAnimationParam, enabled=component:IsEnabled() }
+                component.visibilityAnimationParam = CName.new('None')
+                toggle(component, visibility == 'visibleWhenAiming')
+            end
+        end
     end
     if profile then
         local name = NameToString(main:GetName())
@@ -494,6 +543,9 @@ local function update(delta)
     local player = Game.GetPlayer()
     if not player then
         state = {elapsed=0, originals={}, cameraOn=false};M.path='none';M.cameraFrame=nil
+        M.profile, M.scopeOffset, M.error, M.fallbackReason, M.missingComponents = nil, nil, nil, nil, nil
+        M.magnification = 1
+        M.waitingForStereo = false
         sight.active, sight.looking, M.sightZoom = false, false, 1;syncWeaponLayer(false);sightDot(false);sightLine(nil)
         if (sight.ox ~= 0 or sight.oy ~= 0 or sight.oz ~= 0) and SetVRSightApproach then SetVRSightApproach(0, 0, 0) end
         sight.approach, sight.ox, sight.oy, sight.oz, M.sightApproach = 0, 0, 0, 0, 0;return
@@ -504,7 +556,9 @@ local function update(delta)
         cameraOff(player)
         pcall(updateSightZoom, player, nil, delta)
         if state.weaponID then restoreWeapon() end
-        M.path='none';return
+        M.path, M.profile, M.scopeOffset, M.error, M.fallbackReason, M.missingComponents = 'none', nil, nil, nil, nil, nil
+        M.magnification = 1
+        return
     end
     local weapon = player:GetActiveWeapon()
     state.elapsed = state.elapsed + delta
@@ -578,11 +632,39 @@ local function publishPath()
     end
 end
 
+-- Crosshair callbacks can run before the next optics update after equipment changes.
+-- Only the exact weapon whose fallback completed may retain the native HUD reticle.
+function M.ShouldKeepNativeReticle(weapon)
+    if not M.enabled or M.path ~= 'native' or M.waitingForStereo or not weapon
+        or not state.nativeReticleKey or not Game.VRPhysicalOpticsEnabled() then return false end
+    local id = weapon:GetEntityID()
+    local key = id and tostring(id.hash)
+    return key ~= nil and key == state.weaponKey and key == state.nativeReticleKey
+end
+
+-- One line per equipment/path/error transition in CET's log; also callable as
+-- print(GetMod('CyberpunkVRPort_Optics').diagnostics()) while holding a problem scope.
+function M.diagnostics()
+    return string.format('weapon=%s path=%s profile=%s magnification=%.3f stereoWait=%s error=%s fallback=%s',
+        tostring(state.weaponKey or 'none'), tostring(M.path), tostring(M.profile or 'none'),
+        M.magnification or 1, tostring(M.waitingForStereo == true), tostring(M.error or 'none'),
+        tostring(M.fallbackReason or 'none'))
+end
+local reportedStatus
+local function reportStatus()
+    local status = M.diagnostics()
+    if status ~= reportedStatus then
+        print('[VR optics] '..status)
+        reportedStatus = status
+    end
+end
+
 M.update = update
 registerForEvent('onUpdate', function(delta)
     local ok, err = pcall(M.update, delta)
     if not ok then M.error=tostring(err) end
     pcall(publishPath)
+    pcall(reportStatus)
 end)
 
 registerForEvent('onShutdown', function()
