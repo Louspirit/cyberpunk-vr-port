@@ -1214,7 +1214,7 @@ DWORD OpenXRManager::FrameThreadMain() {
                 const XrFovf gazeFovs[]{m_views[0].fov,m_views[1].fov};
                 const XrQuaternionf gazeEyes[]{m_views[0].pose.orientation,m_views[1].pose.orientation};
                 cvr::gaze::Publish(cvr::projection::Active() && cvr::projection::Windows(gazeFovs,gazeEyes,gazeWindows)
-                    ? cvr::gaze::FromWindows(gazeWindows[0].u,gazeWindows[0].d,gazeWindows[1].u,gazeWindows[1].d)
+                    ? cvr::gaze::FromWindows(gazeWindows[0].u,gazeWindows[0].d,gazeWindows[1].u,gazeWindows[1].d,cvr::gaze::GetCalibration())
                     : cvr::gaze::Center{});
                 MaybeLogRuntimeFovDetails(
                     m_views[0].fov,

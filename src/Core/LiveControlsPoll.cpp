@@ -17,6 +17,7 @@
 #include "Anim/WheelRange.hpp"
 #include "Hooks/Reflex.hpp"
 #include "Hooks/ReflexOptions.hpp"
+#include "Camera/GazeCenter.hpp"
 #include <windows.h>
 #include <psapi.h>
 #include <xinput.h>
@@ -433,6 +434,7 @@ void PollLiveControls() {
     float xrLootFollowDeg=0.0f;
     int xrHudFollowMode=0, xrHudStereoDepth=1;
     float xrHudBrightness=1.0f, xrHudShadow=1.0f, xrHudGlow=1.0f;
+    cvr::gaze::Calibration gaze{};
     cvr::hud::LayoutSettings hudElements{};
     auto framegen=cvr::framegen::GetSettings();
     cvr::foveated::Settings foveated{};
@@ -704,6 +706,7 @@ void PollLiveControls() {
         if (sscanf_s(line,"xr_hud_brightness = %f",&value)==1) { xrHudBrightness=value;continue; }
         if (sscanf_s(line,"xr_hud_shadow = %f",&value)==1) { xrHudShadow=value;continue; }
         if (sscanf_s(line,"xr_hud_glow = %f",&value)==1) { xrHudGlow=value;continue; }
+        if (cvr::gaze::ParseSetting(line,gaze)) continue;
         if (sscanf_s(line, "xr_hud_panel = %d", &intValue) == 1) { xrHudPanel=intValue; continue; }
         if (sscanf_s(line, "xr_hud_follow_deg = %f", &value) == 1) { xrHudFollowDeg=value; continue; }
         if (sscanf_s(line, "xr_hud_fov = %f", &value) == 1) { xrHudFov=value; continue; }
@@ -1522,7 +1525,8 @@ void PollLiveControls() {
 
     const int prevXrRecenter = g_liveControls.xrRecenter;
     const int prevXrMonoSubmit = g_liveControls.xrMonoSubmit;
-    const bool changed = g_liveControls.xrHeadOffsetX != xrHeadOffsetX ||
+    const bool changed = cvr::gaze::GetCalibration()!=gaze ||
+        g_liveControls.xrHeadOffsetX != xrHeadOffsetX ||
         g_liveControls.xrHeadOffsetY != xrHeadOffsetY ||
         g_liveControls.xrHeadOffsetZ != xrHeadOffsetZ ||
         g_liveControls.xrRecenter != xrRecenter ||
@@ -1572,6 +1576,7 @@ void PollLiveControls() {
     g_liveControls.xrHudBrightness=(xrHudBrightness>=0.25f && xrHudBrightness<=3) ? xrHudBrightness : 1;
     g_liveControls.xrHudShadow=(xrHudShadow>=0 && xrHudShadow<=2) ? xrHudShadow : 1;
     g_liveControls.xrHudGlow=(xrHudGlow>=0 && xrHudGlow<=2) ? xrHudGlow : 1;
+    cvr::gaze::Configure(gaze);
     cvr::hud::SetLayoutSettings(hudElements);
     g_liveControls.xrHudFollowDeg=(xrHudFollowDeg>=5 && xrHudFollowDeg<=90) ? xrHudFollowDeg : 60.0f;
     g_liveControls.xrInteractionPanel=xrInteractionPanel!=0;
@@ -1887,6 +1892,8 @@ LiveControlsUiState MakeLiveControlsUiState() {
     state.xrHudBrightness=g_liveControls.xrHudBrightness;
     state.xrHudShadow=g_liveControls.xrHudShadow;
     state.xrHudGlow=g_liveControls.xrHudGlow;
+    const auto gaze=cvr::gaze::GetCalibration();
+    state.xrGazeCenterMode=gaze.mode;state.xrGazePitchDeg=gaze.pitchDegrees;
     state.hudElements=cvr::hud::GetLayoutSettings();
     state.framegen=cvr::framegen::GetSettings();
     state.foveated=cvr::foveated::GetSettings();
@@ -1991,6 +1998,7 @@ void PersistLiveControlsUiState(const LiveControlsUiState& state) {
     fprintf(file,"xr_interaction_panel=%d\nxr_interaction_follow_deg=%.3f\nxr_interaction_distance=%.3f\nxr_interaction_fov=%.3f\n",state.xrInteractionPanel,state.xrInteractionFollowDeg,state.xrInteractionDistance,state.xrInteractionFov);
     fprintf(file,"xr_loot_follow_deg=%.3f\n",state.xrLootFollowDeg);
     fprintf(file,"xr_hud_follow_mode=%d\nxr_hud_stereo_depth=%d\nxr_hud_brightness=%.3f\nxr_hud_shadow=%.3f\nxr_hud_glow=%.3f\n",state.xrHudFollowMode,state.xrHudStereoDepth,state.xrHudBrightness,state.xrHudShadow,state.xrHudGlow);
+    cvr::gaze::WriteSettings(file,{state.xrGazeCenterMode,state.xrGazePitchDeg});
     cvr::hud::SaveLayoutSettings(file,state.hudElements);
     fprintf(file, "xr_3dof_movement=%d\n", state.xr3DofMovement != 0 ? 1 : 0);
     // Not a control, but it MUST be written back: this function rewrites the whole file, so
@@ -2321,6 +2329,7 @@ extern "C" void SetLiveControlsUiState(const LiveControlsUiState* state, int per
     g_liveControls.xrMonoSubmit = state->xrMonoSubmit != 0 ? 1 : 0;
     g_liveControls.xrForceFov = state->xrForceFov > 0.0f ? state->xrForceFov : 0.0f;
     g_liveControls.xrHudPanel=state->xrHudPanel!=0;
+    cvr::gaze::Configure({state->xrGazeCenterMode,state->xrGazePitchDeg});
     g_liveControls.xrHudFollowMode=state->xrHudFollowMode==1;
     g_liveControls.xrHudStereoDepth=state->xrHudStereoDepth!=0;
     g_liveControls.xrHudBrightness=(state->xrHudBrightness>=0.25f && state->xrHudBrightness<=3) ? state->xrHudBrightness : 1;

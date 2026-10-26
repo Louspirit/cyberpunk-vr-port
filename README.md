@@ -407,6 +407,12 @@ General, Framegen, HUD, Controls, Stereo, Avatar, Driving and Bindings.
   swing/pole, wrist offset), diagnostics.
 - **Framegen** - generation backend, pacing, performance history and overlay placement.
 - **HUD** - per-element controls and independent follow cones for HUD channels.
+  **Scanner / Head-gaze aim** selects the rendered view centre or physical headset
+  forward, with a pitch trim that moves the native selection ray and reticle together.
+  Physical headset forward can help when an asymmetric lens window places the rendered
+  centre below a comfortable straight-ahead gaze. Asymmetric projection must be enabled.
+  The default retains the earlier rendered-centre behavior; the settings are
+  `xr_gaze_center_mode` (0 rendered centre, 1 headset forward) and `xr_gaze_pitch_deg`.
 - **Driving / Bindings** - steering geometry and prediction, wheel grip and horn,
   driving controls and the current controller mapping.
 
