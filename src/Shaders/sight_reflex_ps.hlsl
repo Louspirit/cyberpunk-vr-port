@@ -187,7 +187,7 @@ float4 nativeOpticMarks(float2 slope,float axial,float4 projection,float2 tile,b
         const float2 px=max(fwidth(uv),1.0f/float2(w,h));
         [unroll] for(int x=-1;x<=1;++x)
             [unroll] for(int y=-1;y<=1;++y)
-                ink=max(ink,_13.SampleLevel(_32,uv+float2(x,y)*px*.45f,0).rgb);
+                ink=max(ink,_13.SampleLevel(_32,uv+float2(x,y)*px*.75f,0).rgb);
         const float3 border=max(max(_13.SampleLevel(_32,uv-float2(px.x,0),0).rgb,
                                     _13.SampleLevel(_32,uv+float2(px.x,0),0).rgb),
                                 max(_13.SampleLevel(_32,uv-float2(0,px.y),0).rgb,
