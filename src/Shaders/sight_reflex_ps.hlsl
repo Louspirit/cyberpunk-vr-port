@@ -112,6 +112,15 @@
 #define SIGHT_LABEL_GAIN 1.5f
 #endif
 
+// Camera-scope presentation only. Keep the image projection and the reticle's
+// central aiming ray unchanged while making native labels legible in a headset.
+#ifndef SIGHT_CAMERA_HUD_SCALE
+#define SIGHT_CAMERA_HUD_SCALE 1.35f
+#endif
+#ifndef SIGHT_CAMERA_GREEN_TINT
+#define SIGHT_CAMERA_GREEN_TINT 0.25f
+#endif
+
 #ifndef SIGHT_ZERO_U
 #define SIGHT_ZERO_U 0.0f
 #endif
@@ -316,6 +325,11 @@ float4 main(PSIn IN) : SV_Target {
             }
         }
         if(marks) {
+            // A restrained version of the native green optical display, applied
+            // to the scene before the native-colour HUD is composited over it.
+            const float luminance = dot(scene, float3(0.2126f, 0.7152f, 0.0722f));
+            scene = lerp(scene, luminance * float3(0.45f, 1.0f, 0.65f),
+                         saturate(SIGHT_CAMERA_GREEN_TINT));
             const float2 slope=float2(dot(eyeRay,lensT),dot(eyeRay,lensB))/max(axial,1e-5f);
             // The front panel of a smart scope (Nekomata) is a whole HUD framed for
             // the ADS view: native ADS shows its elliptical frame as the frame of the
@@ -332,7 +346,7 @@ float4 main(PSIn IN) : SV_Target {
             const float2 lensUV = float2(saturate(IN.TEXCOORD.x), 1.0f - saturate(IN.TEXCOORD.y));
             // RenderTextureScale.x (unused by this branch, template default 1): size of
             // the projected panels (Grad 1.25).
-            const float size = _29_m0[14].x > 0.0f ? _29_m0[14].x : 1.0f;
+            const float size = (_29_m0[14].x > 0.0f ? _29_m0[14].x : 1.0f) * SIGHT_CAMERA_HUD_SCALE;
             const float4 front=nativeOpticMarks(slope,axial,_29_m0[8],float2(1,0),false,
                 (onLens & 1u) != 0u ? lensUV : float2(-1.0f,-1.0f), size, float2(0.0f,0.0f));
             const float4 rear=nativeOpticMarks(slope,axial,_29_m0[9],float2(1,1),(onLens & 2u) == 0u,
