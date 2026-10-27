@@ -358,7 +358,7 @@ float4 main(PSIn IN) : SV_Target {
             // teal. A projected rear reticle stays opaque with its outline.
             scene+=front.rgb*front.a*2.0f;
             if((onLens & 2u) != 0u) scene+=rear.rgb*rear.a;
-            else scene=scene*(1.0f-rear.a)+rear.rgb*2.0f;
+            else scene=scene*(1.0f-rear.a)+rear.rgb*2.3f;
         }
         return float4(scene, 1.0f);
     }
