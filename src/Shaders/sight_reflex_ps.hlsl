@@ -115,10 +115,10 @@
 // Camera-scope presentation only. Keep the image projection and the reticle's
 // central aiming ray unchanged while making native labels legible in a headset.
 #ifndef SIGHT_CAMERA_HUD_SCALE
-#define SIGHT_CAMERA_HUD_SCALE 1.35f
+#define SIGHT_CAMERA_HUD_SCALE 2.0f
 #endif
 #ifndef SIGHT_CAMERA_GREEN_TINT
-#define SIGHT_CAMERA_GREEN_TINT 0.25f
+#define SIGHT_CAMERA_GREEN_TINT 1.0f
 #endif
 
 #ifndef SIGHT_ZERO_U
@@ -325,10 +325,10 @@ float4 main(PSIn IN) : SV_Target {
             }
         }
         if(marks) {
-            // A restrained version of the native green optical display, applied
+            // A green monochrome optical display, applied
             // to the scene before the native-colour HUD is composited over it.
             const float luminance = dot(scene, float3(0.2126f, 0.7152f, 0.0722f));
-            scene = lerp(scene, luminance * float3(0.45f, 1.0f, 0.65f),
+            scene = lerp(scene, luminance * float3(0.18f, 1.25f, 0.30f),
                          saturate(SIGHT_CAMERA_GREEN_TINT));
             const float2 slope=float2(dot(eyeRay,lensT),dot(eyeRay,lensB))/max(axial,1e-5f);
             // The front panel of a smart scope (Nekomata) is a whole HUD framed for
