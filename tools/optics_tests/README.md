@@ -43,3 +43,28 @@ The binary index, segment and custom-path layouts were checked against
 [WolvenKit ArchiveReader](https://github.com/WolvenKit/WolvenKit/blob/main/WolvenKit.RED4/Archive/IO/ArchiveReader.cs)
 and [LxrsFooter](https://github.com/WolvenKit/WolvenKit/blob/main/WolvenKit.RED4/Archive/Base/LxrsFooter.cs).
 The installed game's existing Oodle decoder was used for read-only decompression.
+
+## Overwatch integrated-scope correction
+
+Live Test2 reported `directRecovered=0 lookupErrors=0` with all seven authored
+components absent. The installed game Grad appearance resource embeds the scope:
+`base\weapons\firearms\rifle_sniper\techtronika_grad\w_rifle_sniper__techtronika_grad.app`
+(hash `ff7bdf55d000087b`). Its `panam` appearance contains the native sniper_01
+scope body and reticles, but does not instantiate the separately patched scope
+appearance. Thus successful standalone resource packing was insufficient.
+
+`build_integrated_scope_patch.py` clones the seven authored components from the
+standalone sniper_01 `panam` appearance into the Grad `panam` appearance, remaps
+handle identities, and updates both component lists and cooked CRUID mappings.
+It rejects mismatched authored scope transforms and duplicate component IDs.
+It validates all original resource properties, other appearances and original
+components semantically before and after WolvenKit's JSON/CR2W round trip.
+
+The separate `mods/archive/!vrport_integrated_optics.archive` contains only that
+modified Grad resource. It preserves the main port archive and supplies meshes
+and widgets through that archive. Packed resource extraction was checked byte
+for byte against the validated CR2W input. Generated/extracted game JSON stays
+in ignored `build/optics-assets`; only the patch archive and builder are tracked.
+
+The candidate fixes Overwatch's `panam` appearance only. It does not claim a
+Nekomata fix or successful headset rendering until the user tests it.
