@@ -175,7 +175,7 @@ float panelEdgeFade(float2 localUV) {
 // on the aim point (panelFillExtent). size: projected panels are drawn at this multiple of their size.
 float4 nativeOpticMarks(float2 slope,float axial,float4 projection,float2 tile,bool central,float2 lensUV,float size,float2 fill) {
     if(projection.w<=0.0f)return 0.0f;
-    const float2 localUV=lensUV.x>=0.0f ? lensUV :
+    const float2 localUV=lensUV.x>=0.0f ? 0.5f+(lensUV-0.5f)/max(size,1e-5f) :
         fill.x>0.0f ? 0.5f+slope*axial/fill :
         0.5f+slope*max(axial+projection.z,1e-5f)/max(projection.xy*size,1e-5f);
     if(any(localUV<0.0f)||any(localUV>1.0f))return 0.0f;
@@ -356,9 +356,9 @@ float4 main(PSIn IN) : SV_Target {
             // ADD colour * coverage and hide nothing behind them. Laid over the image
             // instead, the faint full-tile tint (Nekomata, Grad) turned the whole lens
             // teal. A projected rear reticle stays opaque with its outline.
-            scene+=front.rgb*front.a;
+            scene+=front.rgb*front.a*2.0f;
             if((onLens & 2u) != 0u) scene+=rear.rgb*rear.a;
-            else scene=scene*(1.0f-rear.a)+rear.rgb;
+            else scene=scene*(1.0f-rear.a)+rear.rgb*2.0f;
         }
         return float4(scene, 1.0f);
     }
